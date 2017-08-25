@@ -1,0 +1,118 @@
+#!/bin/bash 
+# Kristjan Adojaan 2011
+# v3
+
+# settings
+database="???"                             # database name(s) - separate with spaces
+user="???"                                      # database user
+password="???" 				 # database password
+dumpoptions=""                                   # anything else to pass to mysqldump
+zip="100"					 # files bigger than it are gzipped (0 = all files gzipped)
+removeperiod="7 day"                            # how old folders to remove
+datadir="/var/lib/mysql/"                        	 # mysql file locations
+backuproot="/home/soft/db_backup/"               # location of dump folders
+logfile=$backuproot"backup_log"                  # logfile location and name (not logged, if empty)
+wholedump=$backuproot$database".latest.sqldump.gz"  # latest sqldump in one file (not created, if empty). Gzipped if ends with .gz.
+log=""
+
+log=$log"--- START: "`date`" ---""`echo -e "\n "`"
+
+databases=$(echo $database | tr ";" "\n")
+
+start=$(date +%s)
+
+for dbname in $databases; do
+
+	backupdir=$backuproot$dbname"/`date +"%F"`/"             # name of particular dump folder, default "2011-08-28"
+	dirtoremove=$backuproot$dbname"/`date -d "-$removeperiod" +"%F"`"   # name of dump folder to remove
+
+	log=$log"--"${dbname^^}"--""`echo -e "\n "`"
+
+
+	
+	# finding all table names
+	  if [ -d $datadir$dbname ]; then
+	    	# removing old folder and creating new
+		if [ -d "$dirtoremove" ]; then
+		  rm -rf $dirtoremove
+		  
+		    log=$log"  Removed "$removeperiod" old files from "$dirtoremove"`echo -e "\n "`"  
+		  else
+		  
+		    log=$log"  Old folder not removed, "$dirtoremove" not found ""`echo -e "\n "`"
+		fi
+		
+		if [ ! -d $backupdir ]; then
+		  if [ ! -d $backuproot$dbname ]; then
+			mkdir $backuproot$dbname
+		  fi
+		  mkdir $backupdir 
+		  
+		    log=$log"  Added new folder"$backupdir"`echo -e "\n "`"  
+		 else
+		  
+		    log=$log"  Nothing added, "$backupdir" already exists""`echo -e "\n "`"  
+		fi
+		failid=`find $datadir$dbname"/" -name '*.frm'`
+		if [ ${#failid} -gt 0  ]; then
+			all_tables=($(ls $datadir$dbname/*.frm | sed s#"$datadir$dbname/"#""#g | sed s#".frm"#""#g )) 
+			if [ $all_tables ]; then
+					  if [ $wholedump ]; then  	  
+					  	log=$log"  Dumping "$dbname" into one file. `echo -e "\n "`"  
+					  	mysqldump -u$user -p$password $dumpoptions $dbname > $wholedump
+					  	if [ -f $wholedump ]; then
+					  		if [ ${wholedump##*.} = 'gz' ]; then
+					  			mv $wholedump ${wholedump%.*}
+								gzip ${wholedump%.*}
+							fi
+							log=$log"   "$wholedump" ("`du -hs $wholedump|sed s#\\\t$wholedump##g`")""`echo -e "\n "`"
+						else
+							log=$log"   "$wholedump" not found, probably file was not created""`echo -e "\n "`"  
+						fi
+					  fi
+					  log=$log"  Dumping "$dbname", zipping files bigger than "$zip"Kb""`echo -e "\n "`"  
+			# processing tables - creating separate dump files for each table
+				for t in "${all_tables[@]}"; do 
+					outfile=$backupdir$t.sql 
+					log=$log"\n "$outfile
+					rm -f $outfile*
+					mysqldump -u$user -p$password $dumpoptions $dbname $t > $outfile 
+					
+					if [ -f $outfile ]; then
+							
+						if [[ $(( `du -s $outfile|sed s#\\\t$outfile##g`)) -gt $zip ]]; then
+							gzip $outfile
+							log=$log"   "$t".sql.gz ("`du -hs $outfile".gz"|sed s#\\\t$outfile".gz"##g`")""`echo -e "\n "`"
+						else
+							log=$log"   "$t".sql ("`du -hs $outfile|sed s#\\\t$outfile##g`")""`echo -e "\n "`"
+						fi
+					else
+						log=$log"   "$t".sql not found, probably file was not created""`echo -e "\n "`"  
+					fi
+				done 
+			fi
+		  else
+		  	rm -rf $backupdir
+		  	
+		  		log=$log"  No tables in "$dbname"`echo -e "\n "`"
+		  		log=$log"  Removed empty folder "$backupdir"`echo -e "\n "`"  
+		  fi
+	  else
+	  	  
+	  	  	log=$log"  No such database ("$dbname")""`echo -e "\n "`"  
+	  fi
+	
+
+	if [ -d $backupdir ]; then
+	  log=$log"  Size ($dbname `date +"%F"`): "`du -hs $backupdir|sed s#\\\t$backupdir##g`""`echo -e "\n "`"
+	  "
+	fi
+done
+
+end=$(date +%s)
+
+
+  log=$log"--- STOP: "`date`" (time "$(( $end - $start ))" s.) --- ""`echo -e "\n "`" 
+if [ $logfile ]; then
+	echo "$log" >> $logfile
+fi
